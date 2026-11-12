@@ -12,11 +12,32 @@ deployment and polls this repository for changes.
 | Endpoint | dock-111-1 (id 6), agent `tcp://10.77.111.10:9001` |
 | Target host | ore-dock-111-1 (10.77.111.10, standalone Docker, not swarm) |
 | Swarm | False (standalone compose stack) |
-| Portainer stack id | 39 |
+| Portainer stack id | 40 |
 | Live services | `minecraft`, `minecraft-backup`, `minecraft-config-init` (one-shot) |
 | Git repo | https://github.com/chaseoriginal/minecraft-111 |
 | Compose file | `docker-compose.yml` |
 | Auto-update poll | every 900s |
+
+## Relationship to mc-charlescraft
+
+This is a **separate server**, not a copy of `mc-charlescraft` (ore-dock-110-10).
+It borrows that stack's configuration:
+
+| | mc-charlescraft | minecraft-111 (this stack) |
+|---|---|---|
+| MOTD | Bedrock and Java Minecraft, survival multiplayer | same |
+| Timezone | America/Denver | same |
+| Java port | 25565/tcp | 25565/tcp |
+| Bedrock port | 19132 | 19132 udp+tcp (NetherNet needs both) |
+| Stats dashboard | 8804/tcp published, **never bound** | 8804/tcp, Plan actually serving |
+| RCON | enabled | enabled |
+| Backups | image-managed, 10 kept | separate service, 7 kept |
+| Server software | Paper 26.1.2 via `05jchambers/legendary-minecraft-geyser-floodgate` | Paper 26.3 via `itzg/minecraft-server:java25` |
+| Plugins | Geyser, Floodgate, ViaVersion, spark | Geyser, Floodgate, ViaVersion, ViaBackwards, LuckPerms, EssentialsX, StellarProtect, GriefPrevention, PlaceholderAPI, VaultUnlocked, Chunky, BlueMap, Plan |
+
+The one gap in the old stack was the statistics page: `mc-charlescraft`
+published port 8804 but the image never bound it, so nothing was served.
+**Plan** is the plugin that provides it, and it is running here.
 
 ## Versions
 
@@ -32,10 +53,11 @@ deployment and polls this repository for changes.
 
 ## Connecting
 
-| Edition | Address | Port | Protocol |
+| Service | Address | Port | Protocol |
 |---|---|---|---|
 | Java Edition | `10.77.111.10` | 25565 | TCP |
 | Bedrock Edition | `10.77.111.10` | 19132 | **UDP** (gameplay) + **TCP** (signaling) |
+| Plan dashboard | `10.77.111.10` | 8804 | TCP |
 
 **Both TCP and UDP 19132 are published.** Geyser's NetherNet transport uses
 TCP to find the server and UDP to play on it. Before NetherNet, forwarding UDP
@@ -70,6 +92,7 @@ Removing a line from that list removes the jar on the next restart.
 | GriefPrevention | land claims |
 | PlaceholderAPI | text placeholders for other plugins |
 | VaultUnlocked | economy/permission API (EssentialsX needs it for chat prefixes) |
+| Plan (Player Analytics) | web dashboard of server/player statistics on port 8804 |
 | Chunky | world pregeneration (removes lag spikes) |
 | BlueMap | web map |
 
@@ -110,21 +133,42 @@ require disabling it; disabling it opens the Java server to cracked clients.
 
 | Volume | Contents |
 |---|---|
-| `minecraft-111_data` | world, plugins, server config |
+| `minecraft-111_data` | world, plugins, server config, Plan SQLite DB |
 | `minecraft-111_backups` | world tarballs, 7 kept |
 
 The `backup` service tars `/data/world` into the backups volume every 5
 minutes and prunes to the 7 most recent archives.
 
-### Geyser config is git-tracked
+### Plan (Player Analytics) dashboard
 
-`geyser-config.yml` in this repo is the source of truth for Geyser. The
-`config-init` one-shot service downloads it into the data volume before the
-server starts, because Geyser only writes `config.yml` when it is missing and
-the itzg image's `APPLY_EXTRA_FILES` refuses to overwrite an existing file.
+The statistics web page lives at **http://10.77.111.10:8804/** and redirects to
+`/server/Echoing Green Minecraft`. It shows online players, playtime, sessions,
+TPS, memory/disk, and per-player history, and it registers extensions for
+Essentials, GriefPrevention, LuckPerms, PlaceholderAPI, Vault and ViaVersion.
 
-To change a Geyser setting: edit `geyser-config.yml`, push, redeploy. Never
-edit the file on the host - the next start overwrites it.
+Plan uses SQLite by default, so no external database is needed. The Plan web
+server defaults to port **8804**, which is the same port the `mc-charlescraft`
+stack publishes - the two are on different hosts so there is no conflict.
+
+Plan requires an account: the first visit asks for a registration code. Get it
+from the server console with `/plan code`, or read it from the startup log.
+Authentication stays ENABLED - the dashboard is reachable but not readable
+without an account.
+
+### Geyser and Plan configs are git-tracked
+
+`geyser-config.yml` and `plan-config.yml` in this repo are the source of truth
+for those plugins. The `config-init` one-shot service downloads both into the
+data volume before the server starts, because Geyser and Plan only write their
+`config.yml` when it is missing and the itzg image's `APPLY_EXTRA_FILES`
+refuses to overwrite an existing file.
+
+`config-init` also chowns both directories to uid 1000. Without that the
+server user cannot write its own plugin directory and Plan dies on startup with
+`IllegalStateException: plugins/Plan/config.yml`.
+
+To change a setting: edit the yaml in git, push, redeploy. Never edit the file
+on the host - the next start overwrites it.
 
 ## How a change is deployed
 
