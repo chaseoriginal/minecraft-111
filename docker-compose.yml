@@ -11,16 +11,15 @@ services:
       - -c
       - |
         set -e
-        mkdir -p /data/plugins/Geyser-Spigot
-        rm -rf /data/plugins/Geyser-Spigot/config.yml
+        mkdir -p /data/plugins/Geyser-Spigot /data/plugins/Plan
+        rm -rf /data/plugins/Geyser-Spigot/config.yml /data/plugins/Plan/config.yml
         wget -q -O /data/plugins/Geyser-Spigot/config.yml \
           https://raw.githubusercontent.com/chaseoriginal/minecraft-111/main/geyser-config.yml
-        chmod 644 /data/plugins/Geyser-Spigot/config.yml
-        mkdir -p /data/plugins/Plan
-        rm -rf /data/plugins/Plan/config.yml
         wget -q -O /data/plugins/Plan/config.yml \
           https://raw.githubusercontent.com/chaseoriginal/minecraft-111/main/plan-config.yml
-        chmod 644 /data/plugins/Plan/config.yml
+        chmod 644 /data/plugins/Geyser-Spigot/config.yml /data/plugins/Plan/config.yml
+        # the server runs as uid 1000 and must own its own plugin dirs
+        chown -R 1000:1000 /data/plugins/Geyser-Spigot /data/plugins/Plan
     volumes:
       - minecraft_data:/data
 
