@@ -46,7 +46,12 @@ bedrock:
     # With "webrtc-proxy-protocol-relays" set under "advanced.bedrock", list the relays here instead.
     # Leave empty to use this machine's own addresses, plus the public address found with "stun-discovery".
     advertise-addresses:
-      - 10.77.111.10:19132
+      # The public hostname. External Bedrock clients resolve it to the public
+      # IP (216.165.142.70); internal clients resolve it to 10.77.111.10 via
+      # split-horizon AD DNS. Advertising the hostname serves both correctly.
+      - mc.echoinggreen.net:19132
+      # The public IP, for clients whose DNS does not split-horizon.
+      - 216.165.142.70:19132
 
     # Finds this server's public address through STUN when "advertise-addresses" is empty.
     # Built-in signaling asks public STUN servers, and the external signaling service asks its own.
