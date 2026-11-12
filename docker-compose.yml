@@ -54,6 +54,11 @@ services:
       # never locks anyone out permanently - see scripts/mc-whitelist.sh.
       ENABLE_WHITELIST: "true"
       ENFORCE_WHITELIST: "true"
+      # Seed names for the whitelist. MERGE means these are added to the
+      # existing whitelist.json on every start and runtime approvals
+      # (whitelist add / fwhitelist add) are NEVER wiped.
+      WHITELIST: "${WHITELIST}"
+      EXISTING_WHITELIST_FILE: "MERGE"
       ENABLE_RCON: "true"
       RCON_PASSWORD: "${RCON_PASSWORD}"
       RCON_PORT: "25575"
