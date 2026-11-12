@@ -10,5 +10,17 @@
     "name": ".echo1000x",
     "level": 4,
     "bypassesPlayerLimit": false
+  },
+  {
+    "uuid": "67bf27f3-6a30-490e-8f5f-739e0d97c621",
+    "name": "Creeperfloat2022",
+    "level": 4,
+    "bypassesPlayerLimit": false
+  },
+  {
+    "uuid": "00000000-0000-0000-0009-01f2e2fc2012",
+    "name": ".creeperg2022",
+    "level": 4,
+    "bypassesPlayerLimit": false
   }
 ]
