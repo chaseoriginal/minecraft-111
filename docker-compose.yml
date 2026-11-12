@@ -1,6 +1,22 @@
 services:
+  # One-shot: clears the runtime-generated Geyser config so the git-tracked
+  # copy (APPLY_EXTRA_FILES) can be applied on every start.
+  config-init:
+    image: alpine:3.20
+    container_name: minecraft-config-init
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - rm -f /data/plugins/Geyser-Spigot/config.yml
+    volumes:
+      - minecraft_data:/data
+
   minecraft:
     image: itzg/minecraft-server:java25
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
     container_name: minecraft
     stdin_open: true
     tty: true
