@@ -57,7 +57,7 @@ published port 8804 but the image never bound it, so nothing was served.
 |---|---|---|---|
 | Java Edition | `10.77.111.10` | 25565 | TCP |
 | Bedrock Edition | `10.77.111.10` | 19132 | **UDP** (gameplay) + **TCP** (signaling) |
-| Plan dashboard | `10.77.111.10` | 8804 | TCP |
+| Plan dashboard | `10.77.111.10` | 8804 | TCP (**HTTPS** - see below) |
 
 **Both TCP and UDP 19132 are published.** Geyser's NetherNet transport uses
 TCP to find the server and UDP to play on it. Before NetherNet, forwarding UDP
@@ -70,10 +70,134 @@ Verified live: Java server-list ping returns `Paper 26.3`, Bedrock ping returns
 ### Internet exposure
 
 For players outside the LAN the router must forward **both TCP and UDP 19132**
-and TCP 25565 to `10.77.111.10`, and `bedrock.signaling.advertise-addresses`
-in `geyser-config.yml` must name the public address
-(`<public-ip>:19132`). The committed value is the LAN address, which is correct
-for internal play only.
+and TCP 25565 to `10.77.111.10`.
+
+`bedrock.signaling.advertise-addresses` in `geyser-config.yml` is committed as:
+
+```yaml
+advertise-addresses:
+  - mc.echoinggreen.net:19132
+  - 216.165.142.70:19132
+```
+
+The hostname is resolved **by the server** when signaling starts (split-horizon
+AD DNS gives it the LAN address), but the *name* is what is handed to clients,
+so a remote Bedrock client resolves it publicly and connects to the public IP.
+The literal public IP is listed as a fallback for clients whose DNS does not
+split-horizon.
+
+> **Open item - UDP 19132.** Geyser 2.12.1 in `transport: nethernet` mode binds
+> **TCP 19132 only** on this host (verified: no UDP socket on `19132` in
+> `/proc/net/udp`, and external UDP probes get *Connection refused*). Geyser's
+> docs say players use TCP to find the server and UDP to play on it, so
+> **external Bedrock gameplay will not work until UDP 19132 is forwarded and
+> Geyser is given a UDP port to bind.** `webrtc-port: 0` makes Geyser use the
+> Bedrock port for its UDP side; the fix is either a real `webrtc-port` value
+> or `transport: both`.
+
+## Plan dashboard: HTTPS, auth, and how to register
+
+Plan **requires HTTPS before it enables authentication**. In Plan 5.9,
+`JettyWebserver.isAuthRequired()` is:
+
+```java
+return isUsingHTTPS() && webserverConfiguration.isAuthenticationEnabled();
+```
+
+So on plain HTTP the auth routes (`/login`, `/register`, `/auth/login`,
+`/auth/register`) are **never registered** and every attempt returns 404 -
+regardless of `Disable_authentication: false`. This is the single most
+confusing thing about Plan: the config says auth is on, and the endpoints
+still do not exist.
+
+This stack therefore serves Plan over **HTTPS** on 8804 with a self-signed
+certificate:
+
+- `cert-init` (a one-shot `eclipse-temurin:25-jdk` service) generates
+  `/data/plugins/Plan/Cert.p12` with `keytool` **on the data volume at
+  startup**. The private key is never committed to git and never leaves the
+  host.
+- `plan-config.yml` points `SSL_certificate.KeyStore_path` at that file.
+
+Browsers will warn once about the self-signed certificate. The dashboard is
+LAN-only (TCP 8804 is not forwarded externally), so this is acceptable.
+
+### Registering an administrator
+
+```bash
+# 1. POST to the endpoint to obtain a registration code (valid 15 min)
+curl -sk -X POST -H "Content-Type: application/x-www-form-urlencoded" \
+  --data "user=admin&password=<password>" \
+  https://10.77.111.10:8804/auth/register
+# -> {"code":"fca76f9061f2","success":true}
+
+# 2. finish it from the server console (superuser = console sender flag)
+ssh ladmin@10.77.111.10 \
+  'sudo -n docker exec -u 1000 minecraft mc-send-to-console "plan register --code fca76f9061f2 superuser"'
+# -> Added a new user (admin) successfully!
+```
+
+Notes:
+- The **first** attempt at step 2 consumes the code and fails with
+  *"Registration failed, player did not have any 'plan.webgroup.{name}'
+  permission"* - the `superuser` flag was missing. The code is then spent and
+  you must request a new one.
+- `plan register` without `--code` prints the register link.
+- The console flag is `superuser`; a *player* sender instead needs the
+  `plan.webgroup.<name>` permission.
+
+Credentials are stored in `~/.hermes/secrets/minecraft-111.txt` (mode 600) and
+should be moved into Keeper - see the Keeper note below.
+
+## Whitelist: Java AND Bedrock in one file
+
+Paper's whitelist is **on** (`white-list=true`, `enforce-whitelist=true`).
+Both editions are covered by the **same** `whitelist.json`:
+
+- Java players are approved by profile name; Paper resolves it to a UUID.
+- Bedrock players are approved with Floodgate's `/fwhitelist`, which writes
+  into the same `whitelist.json`.
+
+Paper's whitelist check lives only in the *network login* path
+(`PlayerList.canPlayerLogin` -> `isWhiteListedLogin`); Geyser joins through an
+injected local connection instead, so **Floodgate is what gates Bedrock
+players**, not Paper's login check.
+
+### The helper script
+
+`scripts/mc-whitelist.sh` runs server-side over the console pipe, so it works
+even while the whitelist would lock you out:
+
+```bash
+./scripts/mc-whitelist.sh add <java-name|gamertag>   # approve
+./scripts/mc-whitelist.sh adduuid <uuid>              # approve by UUID
+./scripts/mc-whitelist.sh remove <name>               # revoke
+./scripts/mc-whitelist.sh list                       # show whitelist
+./scripts/mc-whitelist.sh ops / op <name> / deop <name>
+./scripts/mc-whitelist.sh pending                    # refused join attempts
+./scripts/mc-whitelist.sh approve-pending            # approve every logged UUID
+./scripts/mc-whitelist.sh watch                      # live tail of attempts
+```
+
+**`approve-pending` is the answer to "I don't know all the names."** A player
+who is refused is logged with their UUID (`UUID of player {} is {}`), so you
+approve them by UUID and never have to know or type their name.
+
+Two implementation notes, both learned the hard way:
+
+1. The console command must be piped to the remote shell on **stdin**, not
+   interpolated into the command line - `bash "whitelist list"` passes the
+   command as a *filename* and silently runs nothing.
+2. The fleet's SSH login banner is printed on the remote shell's **stdout**,
+   before the command output, so the reply must be filtered **locally**.
+
+### Seeding vs runtime approvals
+
+`WHITELIST` (in the compose env) seeds names, and
+`EXISTING_WHITELIST_FILE: "MERGE"` makes the itzg image merge those into the
+existing `whitelist.json` instead of replacing it. **Runtime approvals are
+therefore never wiped by a restart** - verified empirically (add -> restart ->
+entry still present).
 
 ## Plugins
 
@@ -128,6 +252,25 @@ require disabling it; disabling it opens the Java server to cracked clients.
 - `docker-compose.yml` - the deployed compose.
 - `.env.example` - the variable names Portainer substitutes, values redacted.
   The real values live in the Portainer stack environment.
+
+## Deployment gotchas learned the hard way
+
+**`raw.githubusercontent.com` serves STALE files.** `config-init` originally
+fetched `plan-config.yml` and `geyser-config.yml` with `wget` from
+`raw.githubusercontent.com`. After a push, the CDN kept serving the *previous*
+revision for minutes - the deploy "succeeded" and silently rolled back the
+config. The fix: `config-init` now **clones the repository** (`git clone
+--depth 1`), which always returns the pushed commit. The GitHub *API* was
+already correct while the raw CDN was stale, which is what made it confusing.
+
+**Never update a Portainer stack's environment via the API.** `PUT /api/stacks/{id}`
+sets `IsDetachedFromGit: true` and nulls `GitConfig`, and the reattach endpoint
+refuses to restore it. Delete and recreate the stack from the repository
+instead. Volumes and the world survive.
+
+**Changing a compose file changes the ConfigHash.** After a push, redeploy and
+confirm the reported ConfigHash equals the commit SHA - that is the proof the
+new revision is live, not just that the API returned 200.
 
 ## Volumes
 
