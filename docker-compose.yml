@@ -17,14 +17,33 @@ services:
         # CDN serves STALE copies of these files for minutes after a push, so
         # a wget here silently deploys the previous revision of the config.
         # A git clone always returns the pushed commit.
-        apk add --no-cache git ca-certificates >/dev/null
+        apk add --no-cache git ca-certificates jq >/dev/null
         git clone --depth 1 https://github.com/chaseoriginal/minecraft-111 /src
         cp /src/geyser-config.yml /data/plugins/Geyser-Spigot/config.yml
         cp /src/plan-config.yml   /data/plugins/Plan/config.yml
-        rm -rf /src
         chmod 644 /data/plugins/Geyser-Spigot/config.yml /data/plugins/Plan/config.yml
         # the server runs as uid 1000 and must own its own plugin dirs
         chown -R 1000:1000 /data/plugins/Geyser-Spigot /data/plugins/Plan
+
+        # Seed the whitelist and ops from git so a rebuilt/lost volume can
+        # never lock the owner out. These are MERGED, not overwritten: any
+        # runtime approval made through scripts/mc-whitelist.sh survives.
+        # NOTE: every $ is doubled - docker compose interpolates $VAR itself.
+        for pair in "whitelist:whitelist-seed.json" "ops:ops-seed.json"; do
+          target="$${pair%%:*}"; seed="$${pair##*:}"
+          file="/data/$${target}.json"
+          [ -f "/src/$${seed}" ] || continue
+          if [ -f "$${file}" ] && [ -s "$${file}" ]; then
+            jq --slurpfile seed "/src/$${seed}" \
+               -f /src/scripts/merge-whitelist.jq "$${file}" > "$${file}.new"
+          else
+            cp "/src/$${seed}" "$${file}.new"
+          fi
+          mv "$${file}.new" "$${file}"
+          chmod 644 "$${file}"
+        done
+        chown 1000:1000 /data/whitelist.json /data/ops.json 2>/dev/null || true
+        rm -rf /src
     volumes:
       - minecraft_data:/data
 
