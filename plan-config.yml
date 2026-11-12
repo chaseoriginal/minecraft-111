@@ -57,10 +57,14 @@ Webserver:
   Public_html_directory: "public_html"
   Security:
     SSL_certificate:
-      KeyStore_path: Cert.jks
-      Key_pass: default
-      Store_pass: default
-      Alias: alias
+      # Self-signed certificate generated at startup by the cert-init service.
+      # It is NOT in git: it is created on the data volume by keytool, so the
+      # private key never leaves the host. The password below only unlocks that
+      # locally generated file, so it is not a fleet secret.
+      KeyStore_path: Cert.p12
+      Key_pass: minecraft111
+      Store_pass: minecraft111
+      Alias: minecraft111
     # HTTPS is required for Login.
     Disable_authentication: false
     # Disable /auth/register endpoint
@@ -90,7 +94,7 @@ Webserver:
       Time: 2
       Unit: HOURS
   Disable_Webserver: false
-  External_Webserver_address: http://10.77.111.10:8804
+  External_Webserver_address: https://10.77.111.10:8804
   Cache:
     Reduced_refresh_barrier:
       Time: 15

@@ -23,10 +23,40 @@ services:
     volumes:
       - minecraft_data:/data
 
+  # Plan requires HTTPS before it enables authentication, so it needs a
+  # keystore. Generate a self-signed one on the data volume at startup - the
+  # private key is never committed to git and never leaves the host.
+  cert-init:
+    image: eclipse-temurin:25-jdk
+    container_name: minecraft-cert-init
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mkdir -p /data/plugins/Plan
+        if [ ! -f /data/plugins/Plan/Cert.p12 ]; then
+          keytool -genkeypair -alias minecraft111 -keyalg RSA -keysize 2048 \
+            -validity 3650 -storetype PKCS12 \
+            -keystore /data/plugins/Plan/Cert.p12 \
+            -storepass minecraft111 -keypass minecraft111 \
+            -dname "CN=minecraft-111, OU=IT, O=Chase Original LLC, C=US" \
+            -ext "SAN=dns:localhost,dns:mc.echoinggreen.net,ip:10.77.111.10"
+          echo "generated self-signed keystore"
+        else
+          echo "keystore already present, keeping it"
+        fi
+        chown -R 1000:1000 /data/plugins/Plan
+    volumes:
+      - minecraft_data:/data
+
   minecraft:
     image: itzg/minecraft-server:java25
     depends_on:
       config-init:
+        condition: service_completed_successfully
+      cert-init:
         condition: service_completed_successfully
     container_name: minecraft
     stdin_open: true
