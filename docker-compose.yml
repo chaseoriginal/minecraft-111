@@ -20,6 +20,7 @@ services:
       SIMULATION_DISTANCE: "${SIMULATION_DISTANCE}"
       LEVEL: "${LEVEL}"
       ENABLE_RCON: "false"
+      CREATE_CONSOLE_IN_PIPE: "true"
       PLUGINS: |
         https://download.geysermc.org/v2/projects/geyser/versions/2.12.1/builds/1300/downloads/spigot
         https://download.geysermc.org/v2/projects/floodgate/versions/2.2.5/builds/141/downloads/spigot
@@ -27,11 +28,12 @@ services:
         https://cdn.modrinth.com/data/NpvuJQoq/versions/DuSWMuYg/ViaBackwards-5.12.3-SNAPSHOT.jar
         https://cdn.modrinth.com/data/Vebnzrzj/versions/b0mk8uS6/LuckPerms-Bukkit-5.5.71.jar
         https://cdn.modrinth.com/data/hXiIvTyT/versions/nY6VN1XH/EssentialsX-2.22.0.jar
-        https://cdn.modrinth.com/data/Lu3KuzdV/versions/3sehX6Sg/CoreProtect-CE-24.1.jar
+        https://cdn.modrinth.com/data/l3Dexbwu/versions/SvYOm8Zu/StellarProtect.jar
         https://cdn.modrinth.com/data/O4o4mKaq/versions/MtwPHMAS/GriefPrevention.jar
         https://cdn.modrinth.com/data/lKEzGugV/versions/pIvQcXW8/PlaceholderAPI-2.12.3.jar
-        https://cdn.modrinth.com/data/o0dhXn0v/versions/Nwwj1jFj/Chunks%200.2.jar
-        https://cdn.modrinth.com/data/swbUV1cr/versions/wIycjaQ7/bluemap-5.29-spigot.jar
+        https://cdn.modrinth.com/data/ayRaM8J7/versions/qZgRzoYs/VaultUnlocked-2.20.3.jar
+        https://cdn.modrinth.com/data/fALzjamp/versions/RBuKjN4k/Chunky-Paper-1.5.66.jar
+        https://cdn.modrinth.com/data/swbUV1cr/versions/uHQIrUdf/bluemap-5.29-paper.jar
     volumes:
       - minecraft_data:/data
 
