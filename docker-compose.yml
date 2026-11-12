@@ -1,6 +1,7 @@
 services:
-  # One-shot: clears the runtime-generated Geyser config so the git-tracked
-  # copy (APPLY_EXTRA_FILES) can be applied on every start.
+  # One-shot: seeds the Geyser config from git so the repo stays the source
+  # of truth. Geyser only writes config.yml when it is missing, so this must
+  # run before the server starts.
   config-init:
     image: alpine:3.20
     container_name: minecraft-config-init
@@ -8,7 +9,13 @@ services:
     command:
       - /bin/sh
       - -c
-      - rm -f /data/plugins/Geyser-Spigot/config.yml
+      - |
+        set -e
+        mkdir -p /data/plugins/Geyser-Spigot
+        rm -rf /data/plugins/Geyser-Spigot/config.yml
+        wget -q -O /data/plugins/Geyser-Spigot/config.yml \
+          https://raw.githubusercontent.com/chaseoriginal/minecraft-111/main/geyser-config.yml
+        chmod 644 /data/plugins/Geyser-Spigot/config.yml
     volumes:
       - minecraft_data:/data
 
@@ -38,8 +45,6 @@ services:
       LEVEL: "${LEVEL}"
       ENABLE_RCON: "false"
       CREATE_CONSOLE_IN_PIPE: "true"
-      APPLY_EXTRA_FILES: |
-        plugins/Geyser-Spigot/config.yml<https://raw.githubusercontent.com/chaseoriginal/minecraft-111/main/geyser-config.yml
       PLUGINS: |
         https://download.geysermc.org/v2/projects/geyser/versions/2.12.1/builds/1300/downloads/spigot
         https://download.geysermc.org/v2/projects/floodgate/versions/2.2.5/builds/141/downloads/spigot
