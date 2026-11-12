@@ -163,6 +163,21 @@ Paper's whitelist check lives only in the *network login* path
 injected local connection instead, so **Floodgate is what gates Bedrock
 players**, not Paper's login check.
 
+### Current members
+
+The owner (**echo1000x**) is approved and is an **operator** on both
+editions, so the whitelist can never lock them out:
+
+| Identity | Name in whitelist | UUID |
+|---|---|---|
+| Java | `echo1000x` | `fd285a21-aac9-4815-b8bc-743a8b6e0e71` |
+| Bedrock | `.echo1000x` | `00000000-0000-0000-0009-01fd891d1427` |
+
+The Java UUID was confirmed against the Mojang API
+(`api.mojang.com/users/profiles/minecraft/echo1000x`). The Bedrock entry
+carries Floodgate's `.` prefix and its own UUID - the two editions are
+different accounts that happen to share a name.
+
 ### The helper script
 
 `scripts/mc-whitelist.sh` runs server-side over the console pipe, so it works
@@ -198,6 +213,86 @@ Two implementation notes, both learned the hard way:
 existing `whitelist.json` instead of replacing it. **Runtime approvals are
 therefore never wiped by a restart** - verified empirically (add -> restart ->
 entry still present).
+
+### The owner's identities are seeded from git
+
+The owner's Java and Bedrock identities live in **`whitelist-seed.json`** and
+**`ops-seed.json`** at the repo root, and `config-init` merges them into
+`/data/whitelist.json` and `/data/ops.json` on **every** start.
+
+Why this exists: the image's `WHITELIST` variable seeds *names* through the
+Mojang API, which cannot express a Bedrock gamertag - Floodgate resolves
+those via the GeyserMC API and it only knows accounts that have already
+connected to a Geyser server. The seed files hold the **resolved UUIDs** for
+both editions, so a rebuilt or lost volume can never lock the owner out and
+no name lookup is needed at boot.
+
+The merge (`scripts/merge-whitelist.jq`) is **additive by UUID**:
+
+- entries already in the file are kept, so runtime approvals survive;
+- seed entries not yet present are added;
+- an existing entry with a **blank** name gets the seed's name filled in
+  (this is what an image-seeded UUID looks like);
+- running it twice changes nothing.
+
+To add another long-term member, add their entry to `whitelist-seed.json`
+(and `ops-seed.json` if they should be an operator) and push. Do not edit
+the live files on the host - the next start overwrites them.
+
+### Gotcha: every `$` in the compose file is doubled
+
+Docker Compose interpolates `$VAR` in the compose file itself, so a shell
+variable inside a `command:` block must be written `$${var}`. A single `$`
+silently becomes an empty string and the script does the wrong thing without
+any error.
+
+### Bedrock externally: signaling (TCP) works, gameplay (UDP) needs a listener
+
+With NetherNet, Bedrock uses **two** paths and they are separate ports in
+practice:
+
+- **TCP 19132** - HTTP signaling. The client asks the server how to
+  connect; this is what puts the server in the Bedrock server list and
+  shows the MOTD. Verified working from inside the container, from the
+  host, and from the control node.
+- **UDP 19132** - the WebRTC/ICE media path where the actual game
+  traffic runs.
+
+Geyser's built-in signaling binds **TCP only**. The ICE (UDP) socket is
+created by the WebRTC stack when a peer connection is created, and
+`ss -lnup` in the container's network namespace shows **no UDP socket**
+while the server is idle - that is expected, not a fault.
+
+The trap is that the UDP path only opens once a real client drives a
+full join (`GET /v1/join` then `POST /v1/join/{networkId}` with an SDP
+offer). A plain UDP probe or a RakNet ping will never be answered by a
+NetherNet-only server, because it is not a RakNet server any more.
+`transport: nethernet` replaced RakNet entirely.
+
+So a "connection refused" on UDP 19132 from outside does **not** prove
+the forwarding is broken. Verify the whole chain instead:
+
+```bash
+# 1. signaling answers (TCP) - proves the container and the forward work
+curl -s http://10.77.111.10:19132/v1/join | head -c 200
+
+# 2. a Bedrock client can reach the media port
+mc-monitor status-bedrock -host 10.77.111.10 -port 19132
+
+# 3. watch the UDP socket appear while a client joins
+sudo -n nsenter -t $(sudo -n docker inspect -f '{{.State.Pid}}' minecraft) -n ss -lnup
+```
+
+`/geyser nethernet diagnostics` reports whether the NXS **provider** is
+running. With `signaling.mode: builtin` there is deliberately no
+provider - that message is normal and is not the fault.
+
+**`transport: both` is the option that keeps a persistent UDP listener.**
+Setting `transport: both` makes Geyser bind UDP 19132 up front for
+RakNet, and NetherNet then needs a *separate* `webrtc-port` (the two
+cannot share one UDP port, and Geyser refuses to start NetherNet if they
+do). That is the configuration to use when clients must connect over
+plain UDP without a WebRTC handshake.
 
 ## Plugins
 
