@@ -16,6 +16,11 @@ services:
         wget -q -O /data/plugins/Geyser-Spigot/config.yml \
           https://raw.githubusercontent.com/chaseoriginal/minecraft-111/main/geyser-config.yml
         chmod 644 /data/plugins/Geyser-Spigot/config.yml
+        mkdir -p /data/plugins/Plan
+        rm -rf /data/plugins/Plan/config.yml
+        wget -q -O /data/plugins/Plan/config.yml \
+          https://raw.githubusercontent.com/chaseoriginal/minecraft-111/main/plan-config.yml
+        chmod 644 /data/plugins/Plan/config.yml
     volumes:
       - minecraft_data:/data
 
@@ -32,18 +37,22 @@ services:
       - "${BIND_IP}:25565:25565/tcp"   # Java Edition
       - "${BIND_IP}:19132:19132/udp"   # Bedrock gameplay (RakNet) - UDP is mandatory
       - "${BIND_IP}:19132:19132/tcp"   # Bedrock signaling (NetherNet) - TCP is mandatory
+      - "${BIND_IP}:8804:8804/tcp"     # Plan (Player Analytics) web dashboard
     environment:
       EULA: "TRUE"
       TYPE: "PAPER"
       VERSION: "26.3"
       MEMORY: "8G"
       MOTD: "${MOTD}"
+      TZ: "America/Denver"
       DIFFICULTY: "${DIFFICULTY}"
       ONLINE_MODE: "TRUE"
       VIEW_DISTANCE: "${VIEW_DISTANCE}"
       SIMULATION_DISTANCE: "${SIMULATION_DISTANCE}"
       LEVEL: "${LEVEL}"
-      ENABLE_RCON: "false"
+      ENABLE_RCON: "true"
+      RCON_PASSWORD: "${RCON_PASSWORD}"
+      RCON_PORT: "25575"
       CREATE_CONSOLE_IN_PIPE: "true"
       PLUGINS: |
         https://download.geysermc.org/v2/projects/geyser/versions/2.12.1/builds/1300/downloads/spigot
@@ -58,6 +67,7 @@ services:
         https://cdn.modrinth.com/data/ayRaM8J7/versions/qZgRzoYs/VaultUnlocked-2.20.3.jar
         https://cdn.modrinth.com/data/fALzjamp/versions/RBuKjN4k/Chunky-Paper-1.5.66.jar
         https://cdn.modrinth.com/data/swbUV1cr/versions/uHQIrUdf/bluemap-5.29-paper.jar
+        https://cdn.modrinth.com/data/wJQfHhxh/versions/atygmVru/Plan-5.9-dev-build-3786.jar
     volumes:
       - minecraft_data:/data
 
