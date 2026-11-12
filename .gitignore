@@ -1,0 +1,12 @@
+# Local env with real values - never committed.
+.env
+
+# Runtime state
+*.log
+backups/
+data/
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.bak

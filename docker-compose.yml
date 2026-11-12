@@ -1,0 +1,63 @@
+services:
+  minecraft:
+    image: itzg/minecraft-server:java25
+    container_name: minecraft
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    ports:
+      - "${BIND_IP}:25565:25565/tcp"   # Java Edition
+      - "${BIND_IP}:19132:19132/udp"   # Bedrock Edition - UDP is mandatory
+    environment:
+      EULA: "TRUE"
+      TYPE: "PAPER"
+      VERSION: "26.3"
+      MEMORY: "8G"
+      MOTD: "${MOTD}"
+      DIFFICULTY: "${DIFFICULTY}"
+      ONLINE_MODE: "TRUE"
+      VIEW_DISTANCE: "${VIEW_DISTANCE}"
+      SIMULATION_DISTANCE: "${SIMULATION_DISTANCE}"
+      LEVEL: "${LEVEL}"
+      ENABLE_RCON: "false"
+      PLUGINS: |
+        https://download.geysermc.org/v2/projects/geyser/versions/2.12.1/builds/1300/downloads/spigot
+        https://download.geysermc.org/v2/projects/floodgate/versions/2.2.5/builds/141/downloads/spigot
+        https://cdn.modrinth.com/data/P1OZGk5p/versions/OKm4Zi14/ViaVersion-5.12.3-SNAPSHOT.jar
+        https://cdn.modrinth.com/data/NpvuJQoq/versions/DuSWMuYg/ViaBackwards-5.12.3-SNAPSHOT.jar
+        https://cdn.modrinth.com/data/Vebnzrzj/versions/b0mk8uS6/LuckPerms-Bukkit-5.5.71.jar
+        https://cdn.modrinth.com/data/hXiIvTyT/versions/nY6VN1XH/EssentialsX-2.22.0.jar
+        https://cdn.modrinth.com/data/Lu3KuzdV/versions/3sehX6Sg/CoreProtect-CE-24.1.jar
+        https://cdn.modrinth.com/data/O4o4mKaq/versions/MtwPHMAS/GriefPrevention.jar
+        https://cdn.modrinth.com/data/lKEzGugV/versions/pIvQcXW8/PlaceholderAPI-2.12.3.jar
+        https://cdn.modrinth.com/data/o0dhXn0v/versions/Nwwj1jFj/Chunks%200.2.jar
+        https://cdn.modrinth.com/data/swbUV1cr/versions/wIycjaQ7/bluemap-5.29-spigot.jar
+    volumes:
+      - minecraft_data:/data
+
+  # Nightly world backup to a separate volume, rotated to 7 files.
+  backup:
+    image: alpine:3.20
+    container_name: minecraft-backup
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          sleep 300
+          ts=$(date +%Y%m%d-%H%M%S)
+          if [ -d /data/world ]; then
+            tar -czf /backups/world-$$ts.tar.gz -C /data world || true
+            ls -1t /backups/world-*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm -f
+          fi
+        done
+    volumes:
+      - minecraft_data:/data:ro
+      - minecraft_backups:/backups
+
+volumes:
+  minecraft_data:
+    name: minecraft-111_data
+  minecraft_backups:
+    name: minecraft-111_backups
