@@ -7,7 +7,8 @@ services:
     restart: unless-stopped
     ports:
       - "${BIND_IP}:25565:25565/tcp"   # Java Edition
-      - "${BIND_IP}:19132:19132/udp"   # Bedrock Edition - UDP is mandatory
+      - "${BIND_IP}:19132:19132/udp"   # Bedrock gameplay (RakNet) - UDP is mandatory
+      - "${BIND_IP}:19132:19132/tcp"   # Bedrock signaling (NetherNet) - TCP is mandatory
     environment:
       EULA: "TRUE"
       TYPE: "PAPER"
@@ -21,6 +22,8 @@ services:
       LEVEL: "${LEVEL}"
       ENABLE_RCON: "false"
       CREATE_CONSOLE_IN_PIPE: "true"
+      APPLY_EXTRA_FILES: |
+        plugins/Geyser-Spigot/config.yml<https://raw.githubusercontent.com/chaseoriginal/minecraft-111/main/geyser-config.yml
       PLUGINS: |
         https://download.geysermc.org/v2/projects/geyser/versions/2.12.1/builds/1300/downloads/spigot
         https://download.geysermc.org/v2/projects/floodgate/versions/2.2.5/builds/141/downloads/spigot
