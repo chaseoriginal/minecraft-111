@@ -49,6 +49,11 @@ services:
       VIEW_DISTANCE: "${VIEW_DISTANCE}"
       SIMULATION_DISTANCE: "${SIMULATION_DISTANCE}"
       LEVEL: "${LEVEL}"
+      # Whitelist ON (Paper 26.3 makes white-list=true the default anyway, but the
+      # image overrides it). Approvals are applied server-side, so an empty list
+      # never locks anyone out permanently - see scripts/mc-whitelist.sh.
+      ENABLE_WHITELIST: "true"
+      ENFORCE_WHITELIST: "true"
       ENABLE_RCON: "true"
       RCON_PASSWORD: "${RCON_PASSWORD}"
       RCON_PORT: "25575"
