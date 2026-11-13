@@ -322,7 +322,11 @@ advanced:
 
     # Whether to log NetherNet's debug messages, from libdatachannel and NetherNet itself, such as what signaling
     # and STUN discovery do. Useful when players cannot connect over NetherNet.
-    nethernet-debug: false
+    # ENABLED 2026-11-12: the session-drop defect (juice: Lost connectivity after
+    # 2-4 min) is still being diagnosed. This logs the ICE candidate pair, the
+    # consent/keepalive state and the STUN results, which is what identifies
+    # which side stops answering. Turn back to false once the drop is explained.
+    nethernet-debug: true
 
   # Advanced options for the external signaling service. Only used in the "nxs" and "hybrid" signaling modes.
   nxs:
