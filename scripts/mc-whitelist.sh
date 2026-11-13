@@ -30,7 +30,12 @@
 #                                  Paper resolves the argument as a NAME only.
 #                                  Use the profile name, or let this script
 #                                  recover the name from the server log.
-#   * `/fwhitelist add <gamertag>` works for a Bedrock gamertag.
+#   * `/fwhitelist add <gamertag>` works ONLY for an account that has already
+#                                  connected to a Geyser server. A player who
+#                                  has NEVER joined fails with "Unable to find
+#                                  user in our cache" - they must attempt to
+#                                  connect once first (the attempt is refused,
+#                                  but it registers their Xbox account).
 #   * `/fwhitelist add <uuid>`     works for a Floodgate UUID.
 #   * `/op <name>`                 works for a Java profile name.
 #   * `/op <gamertag>`             REFUSED - "That player does not exist".
@@ -45,9 +50,16 @@
 #                                  Floodgate UUID, add it to the git-tracked
 #                                  ops seed, push, redeploy and restart.
 #
-# Unknown names: you do NOT need to know a name in advance. A player who tries
-# to connect and is refused is logged with their UUID - run `pending` to see it,
-# then `adduuid <uuid>` to approve them. `approve-pending` does this in bulk.
+# THE NEW-PLAYER LOOP (you do not need to know any name in advance):
+#
+#   1. The player tries to connect and is refused.
+#   2. Run `./mc-whitelist.sh pending` - it lists every refused attempt with
+#      the name and the UUID the server resolved.
+#   3. Run `./mc-whitelist.sh approve-pending` to approve them all at once,
+#      or `./mc-whitelist.sh add <name>` for one of them.
+#   4. For a BEDROCK player who is completely new, their first (refused)
+#      attempt is what puts them in Floodgate's cache, so `add <gamertag>`
+#      only succeeds on the SECOND try - i.e. after one refused attempt.
 
 set -euo pipefail
 
@@ -58,6 +70,11 @@ REPO="${MC_REPO:-/home/ladmin/minecraft-111}"
 PTR_HOST="${MC_PTR_HOST:-10.77.110.10}"
 PTR_STACK="${MC_PTR_STACK:-41}"
 PTR_ENDPOINT="${MC_PTR_ENDPOINT:-6}"
+
+# The server's real refusal wording is "You are not whitelisted on this
+# server!" - NO hyphen. Matching "not white-listed" finds NOTHING (0 of 10
+# real events in the log), which silently makes pending/approve-pending blind.
+REFUSED_RE='not whitelisted|UUID of player|Unable to find user in our cache'
 
 # Run a server console command and print what the server said back.
 #
@@ -81,6 +98,12 @@ console() {
 container_json() {
   ssh -o BatchMode=yes "${SSH_USER}@${HOST}" \
     "sudo -n docker exec ${CONTAINER} cat '$1'" 2>/dev/null
+}
+
+# All refused-join lines from the log.
+refused_lines() {
+  ssh -o BatchMode=yes "${SSH_USER}@${HOST}" \
+    "sudo -n docker logs --since 24h ${CONTAINER} 2>&1 | grep -iE '${REFUSED_RE}' | tail -60" 2>/dev/null || true
 }
 
 # Recover the Java profile name the server logged for a UUID.
@@ -245,34 +268,53 @@ PYEOF
     console "deop $2" || true
     ;;
   pending)
-    # Players who tried to connect and were refused. Paper logs the UUID it
-    # resolved for the attempt; for Bedrock the name arrives prefixed with "."
-    # by Floodgate.
-    echo "Recent blocked join attempts (last 24h):"
-    ssh -o BatchMode=yes "${SSH_USER}@${HOST}" \
-      "sudo -n docker logs --since 24h ${CONTAINER} 2>&1 | \
-       grep -iE 'UUID of player|not white-listed|white-listed on this server|Game profile not found|Unable to find user in our cache' | tail -40" || true
+    echo "Blocked join attempts in the last 24h."
     echo
-    echo "Tip: a Bedrock player shows as '.Gamertag'. Strip the dot and use:"
-    echo "  ./mc-whitelist.sh add Gamertag"
-    echo "Java players: approve with the profile name (Paper refuses a bare UUID)."
-    echo "  ./mc-whitelist.sh add Creeperfloat2022"
-    echo "Bedrock operators need the seed path (Floodgate has no fop command):"
-    echo "  ./mc-whitelist.sh opbedrock Gamertag"
+    echo "JAVA - Paper logs the resolved name and UUID:"
+    refused_lines | grep -iE 'UUID of player' | sort -u | sed 's/^/  /'
+    echo
+    echo "BEDROCK - Geyser logs the gamertag (their first refused attempt also"
+    echo "registers the account with Floodgate, which is what makes the"
+    echo "gamertag resolvable afterwards):"
+    refused_lines | grep -iE '\[Geyser-Spigot\].*not whitelisted' \
+      | sed -E 's/.*\[Geyser-Spigot\] ([^ ]+) has disconnected.*/  \1/' | sort -u
+    echo
+    echo "To approve them all:   ./mc-whitelist.sh approve-pending"
+    echo "To approve one:        ./mc-whitelist.sh add <name>"
+    echo "To make them operator: ./mc-whitelist.sh op <name>            (Java)"
+    echo "                        ./mc-whitelist.sh opbedrock <gamertag>   (Bedrock)"
     ;;
   approve-pending)
-    # Approve every Java player the server logged for a refused join attempt.
-    # Paper's /whitelist add only accepts a NAME, so pair the logged name
-    # with the logged UUID rather than using the UUID directly.
-    ssh -o BatchMode=yes "${SSH_USER}@${HOST}" \
-      "sudo -n docker logs --since 24h ${CONTAINER} 2>&1 | \
-       grep -oiE 'UUID of player [^ ]+ is [0-9a-fA-F-]{36}' | sort -u" \
-    | while read -r _ _ name _ _ uuid; do
-        [ -n "${name:-}" ] && [ -n "${uuid:-}" ] || continue
-        case "$name" in .*) continue ;; esac   # Bedrock: handled by fwhitelist
-        echo "--- approving $name ($uuid)"
+    # Approve every refused attempt. Java players are approved by NAME
+    # (Paper refuses a bare UUID); Bedrock players by gamertag.
+    java_names="$(refused_lines | grep -oiE 'UUID of player [^ ]+ is [0-9a-fA-F-]{36}' \
+                  | sed -E 's/UUID of player ([^ ]+) is .*/\1/' | sort -u \
+                  | grep -v '^\.')"
+    bedrock_tags="$(refused_lines | grep -iE '\[Geyser-Spigot\].*not whitelisted' \
+                  | sed -E 's/.*\[Geyser-Spigot\] ([^ ]+) has disconnected.*/\1/' \
+                  | sort -u | grep -v '^\.')"
+
+    if [ -z "$java_names" ] && [ -z "$bedrock_tags" ]; then
+      echo "No blocked join attempts found in the last 24h."
+      exit 0
+    fi
+
+    if [ -n "$java_names" ]; then
+      echo "$java_names" | while read -r name; do
+        [ -n "$name" ] || continue
+        echo "--- approving Java player '$name'"
         console "whitelist add $name" || true
       done
+    fi
+
+    if [ -n "$bedrock_tags" ]; then
+      echo "$bedrock_tags" | while read -r tag; do
+        [ -n "$tag" ] || continue
+        echo "--- approving Bedrock player '$tag'"
+        console "fwhitelist add $tag" || true
+      done
+    fi
+
     echo
     echo "--- whitelist now ---"
     console "whitelist list" || true
@@ -280,7 +322,7 @@ PYEOF
   watch)
     ssh -o BatchMode=yes "${SSH_USER}@${HOST}" \
       "sudo -n docker logs -f ${CONTAINER} 2>&1 | \
-       grep --line-buffered -iE 'UUID of player|not white-listed|Game profile not found|Unable to find user in our cache'" || true
+       grep --line-buffered -iE '${REFUSED_RE}'" || true
     ;;
   *)
     usage
