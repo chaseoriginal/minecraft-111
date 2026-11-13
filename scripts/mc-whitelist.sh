@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Approve / revoke players on the minecraft-111 server.
+# Approve / revoke players on a Minecraft server (Paper + Geyser/Floodgate).
 #
 #   ./mc-whitelist.sh add <name>        approve a player (Java name or Xbox gamertag)
-#   ./mc-whitelist.sh adduuid <uuid>    approve by UUID (either edition)
+#   ./mc-whitelist.sh adduuid <uuid>    approve a Java player whose UUID you know
 #   ./mc-whitelist.sh remove <name>     revoke a player
 #   ./mc-whitelist.sh list              show the whitelist
-#   ./mc-whitelist.sh ops               show operators
-#   ./mc-whitelist.sh op <name>         grant operator (also bypasses the whitelist)
+#   ./mc-whitelist.sh ops               show operators (read from ops.json)
+#   ./mc-whitelist.sh op <name>         grant operator to a JAVA player
+#   ./mc-whitelist.sh opbedrock <tag>   grant operator to a BEDROCK player
 #   ./mc-whitelist.sh deop <name>       revoke operator
 #   ./mc-whitelist.sh pending           show recent blocked join attempts
 #   ./mc-whitelist.sh watch             tail join attempts live
@@ -21,23 +22,47 @@
 # Bedrock      : pass the Xbox gamertag WITHOUT the Floodgate "." prefix.
 #                 Floodgate looks the XUID up via the GeyserMC API, which only
 #                 knows accounts that have already connected to a Geyser server.
-#                 If that lookup fails, use `adduuid` with the Floodgate UUID
-#                 (the UUID the server logged for that player).
+#
+# VERIFIED BEHAVIOUR ON Paper 26.3 + Geyser 2.12.1 + Floodgate 2.2.5:
+#
+#   * `/whitelist add <name>`      works for a Java profile name.
+#   * `/whitelist add <uuid>`      REFUSED - "That player does not exist".
+#                                  Paper resolves the argument as a NAME only.
+#                                  Use the profile name, or let this script
+#                                  recover the name from the server log.
+#   * `/fwhitelist add <gamertag>` works for a Bedrock gamertag.
+#   * `/fwhitelist add <uuid>`     works for a Floodgate UUID.
+#   * `/op <name>`                 works for a Java profile name.
+#   * `/op <gamertag>`             REFUSED - "That player does not exist".
+#   * `/op` (no argument)         REFUSED - "Unknown or incomplete command".
+#                                  Read /data/ops.json instead.
+#   * `/fop`                       DOES NOT EXIST in Floodgate 2.2.5. Floodgate
+#                                  registers only `fwhitelist`. A Bedrock
+#                                  operator status must therefore come from
+#                                  ops.json, which Paper reads at STARTUP -
+#                                  so it needs a restart to take effect.
+#                                  `opbedrock` does the whole job: resolve the
+#                                  Floodgate UUID, add it to the git-tracked
+#                                  ops seed, push, redeploy and restart.
 #
 # Unknown names: you do NOT need to know a name in advance. A player who tries
 # to connect and is refused is logged with their UUID - run `pending` to see it,
-# then `adduuid <uuid>` to approve them.
+# then `adduuid <uuid>` to approve them. `approve-pending` does this in bulk.
 
 set -euo pipefail
 
 HOST="${MC_HOST:-10.77.111.10}"
 CONTAINER="${MC_CONTAINER:-minecraft}"
 SSH_USER="${MC_SSH_USER:-ladmin}"
+REPO="${MC_REPO:-/home/ladmin/minecraft-111}"
+PTR_HOST="${MC_PTR_HOST:-10.77.110.10}"
+PTR_STACK="${MC_PTR_STACK:-41}"
+PTR_ENDPOINT="${MC_PTR_ENDPOINT:-6}"
 
 # Run a server console command and print what the server said back.
 #
-# The command is piped to the REMOTE shell on stdin (not interpolated into the
-# command line) so spaces and quotes in it survive intact. The reply is
+# The command is piped to the REMOTE shell on stdin (not interpolated into
+# the command line) so spaces and quotes in it survive intact. The reply is
 # filtered LOCALLY: the fleet's SSH login banner is printed on the remote
 # shell's stdout before the command output, so it cannot be filtered remotely.
 console() {
@@ -52,8 +77,59 @@ console() {
     | tail -8
 }
 
+# Read a JSON file out of the running container.
+container_json() {
+  ssh -o BatchMode=yes "${SSH_USER}@${HOST}" \
+    "sudo -n docker exec ${CONTAINER} cat '$1'" 2>/dev/null
+}
+
+# Recover the Java profile name the server logged for a UUID.
+# The login listener logs "UUID of player <name> is <uuid>".
+name_for_uuid() {
+  local uuid="$1"
+  ssh -o BatchMode=yes "${SSH_USER}@${HOST}" \
+    "sudo -n docker logs --since 72h ${CONTAINER} 2>&1 \
+     | grep -oiE 'UUID of player [^ ]+ is ${uuid}' \
+     | sed -E 's/UUID of player (.*) is .*/\1/' | tail -1" 2>/dev/null || true
+}
+
+# Resolve a Bedrock gamertag to its Floodgate UUID by whitelisting it and
+# reading back whitelist.json. Floodgate stores it as
+# 00000000-0000-0000-0009-01<hex xuid>.
+floodgate_uuid_for_tag() {
+  local tag="$1"
+  console "fwhitelist add ${tag}" >/dev/null 2>&1 || true
+  container_json /data/whitelist.json \
+    | python3 -c "
+import json,sys
+tag=sys.argv[1].lower()
+for e in json.load(sys.stdin):
+    n=(e.get('name') or '').lower()
+    if n in (tag, '.'+tag) and e.get('uuid','').startswith('00000000-0000-0000-0009'):
+        print(e['uuid']); break
+" "$tag" 2>/dev/null || true
+}
+
+# Portainer access is over an SSH tunnel to 127.0.0.1:9443 on the Portainer
+# host. NEVER use PUT /api/stacks/{id} on a git-backed stack - it detaches
+# git. The safe routes are the git redeploy and the container restart.
+portainer_tunnel() {
+  local lp="$1"
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes \
+      -N -f -L "${lp}:127.0.0.1:9443" "${SSH_USER}@${PTR_HOST}" 2>/dev/null
+}
+
+portainer_curl() {
+  local lp="$1" method="$2" path="$3" data="${4:-}"
+  local key
+  key="$(cat "${HOME}/.hermes/secrets/portainer_api_key")"
+  local args=(-sk -m 60 -X "$method" -H "X-API-KEY: ${key}")
+  [ -n "$data" ] && args+=(-H 'Content-Type: application/json' --data-binary "$data")
+  curl "${args[@]}" "https://127.0.0.1:${lp}${path}" -w '\nHTTP %{http_code}\n'
+}
+
 usage() {
-  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 }
 
@@ -75,7 +151,20 @@ case "$cmd" in
     ;;
   adduuid)
     [ $# -eq 2 ] || usage
-    console "whitelist add ${2}" || true
+    uuid="$2"
+    # Paper refuses a bare UUID on /whitelist add, so recover the profile
+    # name from the login log and approve by name.
+    name="$(name_for_uuid "$uuid")"
+    if [ -n "$name" ]; then
+      echo "Recovered Java profile name '${name}' for ${uuid}"
+      console "whitelist add ${name}" || true
+    else
+      echo "No name found in the log for ${uuid}."
+      echo "Paper's /whitelist add only accepts a NAME, not a UUID."
+      echo "If this is a Bedrock player, use: fwhitelist add <uuid>"
+      console "fwhitelist add ${uuid}" || true
+    fi
+    echo
     echo "--- whitelist now ---"
     console "whitelist list" || true
     ;;
@@ -88,12 +177,68 @@ case "$cmd" in
     console "whitelist list" || true
     ;;
   ops)
-    console "op" || true
+    # `/op` with no argument is not a command on Paper 26.3 - read the file.
+    container_json /data/ops.json || true
     ;;
   op)
     [ $# -eq 2 ] || usage
     console "op $2" || true
     echo "Note: operators bypass the whitelist entirely."
+    ;;
+  opbedrock)
+    [ $# -eq 2 ] || usage
+    tag="$2"
+    echo "Resolving Floodgate UUID for Bedrock gamertag '${tag}'..."
+    fuuid="$(floodgate_uuid_for_tag "$tag")"
+    if [ -z "$fuuid" ]; then
+      echo "Could not resolve '${tag}'."
+      echo "The player must have connected at least once so Floodgate knows"
+      echo "the account. Check the gamertag spelling and try again."
+      exit 1
+    fi
+    echo "Floodgate UUID: ${fuuid}"
+    echo "Adding to ${REPO}/ops-seed.json and restarting the server..."
+    python3 - "$REPO/ops-seed.json" "$fuuid" ".${tag}" <<'PYEOF'
+import json, sys
+path, uuid, name = sys.argv[1], sys.argv[2], sys.argv[3]
+ops = json.load(open(path))
+if not any(o.get("uuid") == uuid for o in ops):
+    ops.append({"uuid": uuid, "name": name, "level": 4, "bypassesPlayerLimit": False})
+    json.dump(ops, open(path, "w"), indent=2)
+    open(path, "a").write("\n")
+    print(f"seed updated: {name} {uuid}")
+else:
+    print(f"already in seed: {name} {uuid}")
+PYEOF
+    cd "$REPO"
+    git add ops-seed.json
+    git -c user.name='Chase' -c user.email='chase@echoinggreen.net' \
+        commit -m "Grant ${tag} operator rights (Bedrock)" >/dev/null || true
+    git push origin main >/dev/null 2>&1 || echo "push failed - run git push manually"
+    echo "Redeploying stack ${PTR_STACK} from git, then restarting the server..."
+    LP=19443
+    if portainer_tunnel "$LP"; then
+      portainer_curl "$LP" PUT \
+        "/api/stacks/${PTR_STACK}/git/redeploy?endpointId=${PTR_ENDPOINT}" '{}' | tail -2
+      # Restart the container so Paper reloads ops.json from disk.
+      CID=$(curl -sk -m 25 -G -H "X-API-KEY: $(cat "${HOME}/.hermes/secrets/portainer_api_key")" \
+        --data-urlencode 'all=1' \
+        --data-urlencode "filters={\"label\":[\"com.docker.compose.project=minecraft-111\",\"com.docker.compose.service=minecraft\"]}" \
+        "https://127.0.0.1:${LP}/api/endpoints/${PTR_ENDPOINT}/docker/containers/json" \
+        | python3 -c "import json,sys;d=json.load(sys.stdin);print(d[0]['Id'] if d else '')" 2>/dev/null || true)
+      if [ -n "$CID" ]; then
+        portainer_curl "$LP" POST \
+          "/api/endpoints/${PTR_ENDPOINT}/docker/containers/${CID}/restart?t=40" | tail -1
+      fi
+      pkill -f "127.0.0.1:${LP}:127.0.0.1:9443" 2>/dev/null || true
+    else
+      echo "Could not reach Portainer - restart the server manually for the op to load."
+    fi
+    echo "Waiting for the server to restart and reload ops.json..."
+    sleep 60
+    echo
+    echo "--- ops.json now ---"
+    container_json /data/ops.json || true
     ;;
   deop)
     [ $# -eq 2 ] || usage
@@ -110,24 +255,24 @@ case "$cmd" in
     echo
     echo "Tip: a Bedrock player shows as '.Gamertag'. Strip the dot and use:"
     echo "  ./mc-whitelist.sh add Gamertag"
-    echo "If Floodgate cannot resolve the tag (player has never joined any"
-    echo "Geyser server), copy the UUID from the log and use:"
-    echo "  ./mc-whitelist.sh adduuid <uuid>"
+    echo "Java players: approve with the profile name (Paper refuses a bare UUID)."
+    echo "  ./mc-whitelist.sh add Creeperfloat2022"
+    echo "Bedrock operators need the seed path (Floodgate has no fop command):"
+    echo "  ./mc-whitelist.sh opbedrock Gamertag"
     ;;
   approve-pending)
-    # Approve every UUID the server logged for a refused join attempt.
-    uuids=$(ssh -o BatchMode=yes "${SSH_USER}@${HOST}" \
+    # Approve every Java player the server logged for a refused join attempt.
+    # Paper's /whitelist add only accepts a NAME, so pair the logged name
+    # with the logged UUID rather than using the UUID directly.
+    ssh -o BatchMode=yes "${SSH_USER}@${HOST}" \
       "sudo -n docker logs --since 24h ${CONTAINER} 2>&1 | \
-       grep -oiE 'UUID of player .* is [0-9a-fA-F-]{36}' | grep -oE '[0-9a-fA-F-]{36}' | sort -u" || true)
-    if [ -z "$uuids" ]; then
-      echo "No blocked join attempts found in the last 24h."
-      exit 0
-    fi
-    echo "$uuids" | while read -r u; do
-      [ -n "$u" ] || continue
-      echo "--- approving $u"
-      console "whitelist add $u" || true
-    done
+       grep -oiE 'UUID of player [^ ]+ is [0-9a-fA-F-]{36}' | sort -u" \
+    | while read -r _ _ name _ _ uuid; do
+        [ -n "${name:-}" ] && [ -n "${uuid:-}" ] || continue
+        case "$name" in .*) continue ;; esac   # Bedrock: handled by fwhitelist
+        echo "--- approving $name ($uuid)"
+        console "whitelist add $name" || true
+      done
     echo
     echo "--- whitelist now ---"
     console "whitelist list" || true
