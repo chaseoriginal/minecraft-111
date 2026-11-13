@@ -97,13 +97,41 @@ split-horizon.
 > `juice: Lost connectivity` (libdatachannel) followed by
 > `creeperg2022 has disconnected ... CONNECTION_LOST` or
 > `Bedrock client timed out`. The player rejoins successfully, so this is a
-> long-lived-UDP-flow problem, not a reachability one. Prime suspect is
-> Docker's **userland proxy** (`EnableUserlandProxy: true` on this host):
-> `docker-proxy` terminates published UDP in userspace, and its flow handling
-> is a known source of dropped long-lived UDP sessions. The standard fix is
-> `"userland-proxy": false` in `/etc/docker/daemon.json` so pure iptables DNAT
-> carries the flow. That needs a Docker daemon restart on ore-dock-111-1, so
-> it is a maintenance-window decision, not a blind change.
+> long-lived-UDP-flow problem, not a reachability one.
+>
+> **Change applied 2026-11-12: Docker's userland proxy is now disabled on this
+> host.** `/etc/docker/daemon.json` contains
+> `{"userland-proxy": false}`; `dockerd` was restarted and `docker-proxy`
+> process count on the host is now **0**. Published ports are served by
+> `dockerd` itself with pure kernel DNAT - verified by
+> `ss -lnup` showing `users:(("dockerd",...))` on UDP 19132 instead of
+> `docker-proxy`, and by the `nft` DNAT counter for `udp dport 19132`
+> incrementing by exactly the number of external probes sent.
+>
+> **Caveat - the fix is NOT yet proven against the symptom.** The pre-change
+> DNAT counters already showed external UDP being kernel-DNAT'd to the
+> container, so `docker-proxy` may not have been in the external flow at all.
+> The change is a genuine improvement (userspace proxying of a game server's
+> UDP is not desirable) but the drop may have a different cause. ICE
+> diagnostics are therefore ENABLED (`nethernet-debug: true`) so the next
+> real client session logs the candidate pair, the STUN results and the
+> consent/keepalive state - that log names which side stops answering.
+> Turn `nethernet-debug` back to `false` once the drop is explained.
+>
+> **Other findings from the same investigation:**
+>
+> - `mc.echoinggreen.net` resolves to the **LAN IP** `10.77.111.10` from this
+>   host (split-horizon AD DNS) and to the public IP `216.165.142.70` from
+>   public resolvers. Geyser logs `Advertised address mc.echoinggreen.net
+>   resolves to 10.77.111.10` at startup - so the hostname Geyser hands to
+>   clients is one that resolves differently for the server than for a remote
+>   player. The literal public IP in `advertise-addresses` is what makes the
+>   remote path work; the hostname entry is the one that resolves to LAN.
+> - Host conntrack UDP timeouts are `nf_conntrack_udp_timeout=30` and
+>   `nf_conntrack_udp_timeout_stream=120` - short enough to be worth raising
+>   if the drop turns out to be a stateful-firewall expiry.
+> - The host NIC has MTU 9000 but the Docker bridge and the container are
+>   MTU 1500, so there is no jumbo-frame leak into the container path.
 
 ## Plan dashboard: HTTPS, auth, and how to register
 
