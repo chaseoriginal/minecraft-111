@@ -12,8 +12,8 @@ deployment and polls this repository for changes.
 | Endpoint | dock-111-1 (id 6), agent `tcp://10.77.111.10:9001` |
 | Target host | ore-dock-111-1 (10.77.111.10, standalone Docker, not swarm) |
 | Swarm | False (standalone compose stack) |
-| Portainer stack id | 40 |
-| Live services | `minecraft`, `minecraft-backup`, `minecraft-config-init` (one-shot) |
+| Portainer stack id | 41 |
+| Live services | `minecraft`, `minecraft-backup`, `minecraft-config-init` (one-shot), `minecraft-cert-init` (one-shot) |
 | Git repo | https://github.com/chaseoriginal/minecraft-111 |
 | Compose file | `docker-compose.yml` |
 | Auto-update poll | every 900s |
@@ -86,14 +86,24 @@ so a remote Bedrock client resolves it publicly and connects to the public IP.
 The literal public IP is listed as a fallback for clients whose DNS does not
 split-horizon.
 
-> **Open item - UDP 19132.** Geyser 2.12.1 in `transport: nethernet` mode binds
-> **TCP 19132 only** on this host (verified: no UDP socket on `19132` in
-> `/proc/net/udp`, and external UDP probes get *Connection refused*). Geyser's
-> docs say players use TCP to find the server and UDP to play on it, so
-> **external Bedrock gameplay will not work until UDP 19132 is forwarded and
-> Geyser is given a UDP port to bind.** `webrtc-port: 0` makes Geyser use the
-> Bedrock port for its UDP side; the fix is either a real `webrtc-port` value
-> or `transport: both`.
+> **External Bedrock gameplay is PROVEN working** (2026-11-12). A real Bedrock
+> client (gamertag `creeperg2022`, source IP `69.129.200.236` - outside the LAN)
+> completed four separate sessions: the ICE handshake reached
+> `Changed ICE state to completed`, the player entered the world, issued server
+> commands (`/give @s bed`) and earned advancements. The UDP gameplay path is
+> therefore open end to end.
+>
+> **Known defect - sessions drop every 2-4 minutes.** Each session ends with
+> `juice: Lost connectivity` (libdatachannel) followed by
+> `creeperg2022 has disconnected ... CONNECTION_LOST` or
+> `Bedrock client timed out`. The player rejoins successfully, so this is a
+> long-lived-UDP-flow problem, not a reachability one. Prime suspect is
+> Docker's **userland proxy** (`EnableUserlandProxy: true` on this host):
+> `docker-proxy` terminates published UDP in userspace, and its flow handling
+> is a known source of dropped long-lived UDP sessions. The standard fix is
+> `"userland-proxy": false` in `/etc/docker/daemon.json` so pure iptables DNAT
+> carries the flow. That needs a Docker daemon restart on ore-dock-111-1, so
+> it is a maintenance-window decision, not a blind change.
 
 ## Plan dashboard: HTTPS, auth, and how to register
 
@@ -166,17 +176,27 @@ players**, not Paper's login check.
 ### Current members
 
 The owner (**echo1000x**) is approved and is an **operator** on both
-editions, so the whitelist can never lock them out:
+editions, so the whitelist can never lock them out. Two more players were
+approved and op'd on 2026-11-12:
 
-| Identity | Name in whitelist | UUID |
-|---|---|---|
-| Java | `echo1000x` | `fd285a21-aac9-4815-b8bc-743a8b6e0e71` |
-| Bedrock | `.echo1000x` | `00000000-0000-0000-0009-01fd891d1427` |
+| Identity | Name in whitelist | UUID | Operator |
+|---|---|---|---|
+| Java | `echo1000x` | `fd285a21-aac9-4815-b8bc-743a8b6e0e71` | yes |
+| Bedrock | `.echo1000x` | `00000000-0000-0000-0009-01fd891d1427` | yes |
+| Java | `Creeperfloat2022` | `67bf27f3-6a30-490e-8f5f-739e0d97c621` | yes |
+| Bedrock | `.creeperg2022` | `00000000-0000-0000-0009-01f2e2fc2012` | yes |
 
 The Java UUID was confirmed against the Mojang API
-(`api.mojang.com/users/profiles/minecraft/echo1000x`). The Bedrock entry
-carries Floodgate's `.` prefix and its own UUID - the two editions are
+(`api.mojang.com/users/profiles/minecraft/echo1000x`). The Bedrock entries
+carry Floodgate's `.` prefix and their own UUIDs - the two editions are
 different accounts that happen to share a name.
+
+**Bedrock operator status has no command.** Floodgate 2.2.5 ships no `/fop`,
+and `/op <gamertag>` is refused with *"That player does not exist"*. Operator
+status comes from `ops.json`, which Paper reads only at STARTUP - so granting
+one to a Bedrock player requires editing `ops-seed.json`, pushing, and
+restarting the server. `scripts/mc-whitelist.sh opbedrock <tag>` does all
+three.
 
 ### The helper script
 
