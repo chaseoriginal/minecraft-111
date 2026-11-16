@@ -76,7 +76,7 @@ services:
       - minecraft_data:/data
 
   minecraft:
-    image: itzg/minecraft-server:java25@sha256:e528e38848e1456d683a60c624ce2b1a5ae15d1b221d368108fa05853388285a@sha256:e528e38848e1456d683a60c624ce2b1a5ae15d1b221d368108fa05853388285a
+    image: itzg/minecraft-server:java25@sha256:e528e38848e1456d683a60c624ce2b1a5ae15d1b221d368108fa05853388285a@sha256:e528e38848e1456d683a60c624ce2b1a5ae15d1b221d368108fa05853388285a@sha256:e528e38848e1456d683a60c624ce2b1a5ae15d1b221d368108fa05853388285a
     depends_on:
       config-init:
         condition: service_completed_successfully
