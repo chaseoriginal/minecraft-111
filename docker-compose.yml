@@ -3,7 +3,7 @@ services:
   # of truth. Geyser only writes config.yml when it is missing, so this must
   # run before the server starts.
   config-init:
-    image: 3.20.10
+    image: alpine:3.20.10
     container_name: minecraft-config-init
     restart: "no"
     command:
@@ -136,7 +136,7 @@ services:
 
   # Nightly world backup to a separate volume, rotated to 7 files.
   backup:
-    image: 3.20.10
+    image: alpine:3.20.10
     container_name: minecraft-backup
     restart: unless-stopped
     command:
