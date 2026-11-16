@@ -51,7 +51,7 @@ services:
   # keystore. Generate a self-signed one on the data volume at startup - the
   # private key is never committed to git and never leaves the host.
   cert-init:
-    image: eclipse-temurin:25-jdk
+    image: 25.0.5_8-jdk
     container_name: minecraft-cert-init
     restart: "no"
     command:
